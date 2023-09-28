@@ -22,92 +22,94 @@ import org.springframework.stereotype.Component;
 
 /**
  * Publishes from the mirror directory into a remote target maven repository.
- * 
+ *
  * @author mike
  */
 @Component
 public class Publisher {
 
-    private static final Logger LOG = LoggerFactory.getLogger(Publisher.class);
+  private static final Logger LOG = LoggerFactory.getLogger(Publisher.class);
 
-    @Value("${target.root-url}")
-    private String rootUrl;
+  @Value("${target.root-url:#{null}}")
+  private String rootUrl;
 
-    @Value("${target.user:#{null}}")
-    private String username;
+  @Value("${target.user:#{null}}")
+  private String username;
 
-    @Value("${target.password:#{null}}")
-    private String password;
+  @Value("${target.password:#{null}}")
+  private String password;
 
-    @Value("${mirror-path:./mirror/}")
-    private String rootMirrorPath;
+  @Value("${mirror-path:./mirror/}")
+  private String rootMirrorPath;
 
-    public void publish() throws Exception {
-        LOG.info("Publishing to " + rootUrl + " ...");
-        HttpClient httpClient = HttpClient.newBuilder().build();
-        publishDirectory(httpClient, rootUrl, Paths.get(rootMirrorPath).normalize());
-        LOG.info("Publishing complete.");
+  public void publish() throws IOException, InterruptedException {
+    LOG.info("Publishing to {} ...", rootUrl);
+    HttpClient httpClient = HttpClient.newBuilder().build();
+    publishDirectory(httpClient, rootUrl, Paths.get(rootMirrorPath).normalize());
+    LOG.info("Publishing complete.");
+  }
+
+  public void publishDirectory(HttpClient httpClient, String repositoryUrl, Path mirrorPath)
+      throws IOException, InterruptedException {
+
+    LOG.debug("Switching to mirror directory: {}}", mirrorPath.toAbsolutePath());
+
+    List<Path> recursePaths = new ArrayList<>();
+
+    try (DirectoryStream<Path> stream = Files.newDirectoryStream(mirrorPath)) {
+      for (Path path : stream) {
+        if (Files.isDirectory(path)) {
+          recursePaths.add(path);
+        } else {
+          handleFile(httpClient, repositoryUrl, path);
+        }
+      }
     }
 
-    public void publishDirectory(HttpClient httpClient, String repositoryUrl, Path mirrorPath)
-        throws IOException, InterruptedException {
-
-        LOG.debug("Switching to mirror directory: " + mirrorPath.toAbsolutePath());
-
-        List<Path> recursePaths = new ArrayList<>();
-
-        try (DirectoryStream<Path> stream = Files.newDirectoryStream(mirrorPath)) {
-            for (Path path : stream) {
-                if (Files.isDirectory(path)) {
-                    recursePaths.add(path);
-                } else {
-                    handleFile(httpClient, repositoryUrl, path);
-                }
-            }
-        }
-
-        // Tail recursion
-        for (Path recursePath : recursePaths) {
-            String subpath = mirrorPath.relativize(recursePath).toString();
-            publishDirectory(httpClient, appendUrlPathSegment(repositoryUrl, subpath), recursePath);
-        }
+    // Tail recursion
+    for (Path recursePath : recursePaths) {
+      String subpath = mirrorPath.relativize(recursePath).toString();
+      publishDirectory(httpClient, appendUrlPathSegment(repositoryUrl, subpath), recursePath);
     }
+  }
 
-    private void handleFile(HttpClient httpClient, String repositoryUrl, Path path)
-        throws IOException, InterruptedException {
+  private void handleFile(HttpClient httpClient, String repositoryUrl, Path path)
+      throws IOException, InterruptedException {
 
-        String filename = path.getFileName().toString();
-        String targetUrl = repositoryUrl + filename;
-        LOG.info("Uploading " + targetUrl);
+    String filename = path.getFileName().toString();
+    String targetUrl = repositoryUrl + filename;
+    LOG.info("Uploading {}", targetUrl);
 
-        Utils.sleep(1000);
-        HttpRequest request = Utils.setCredentials(HttpRequest.newBuilder(), username, password)
-            .uri(URI.create(targetUrl))
-            .PUT(BodyPublishers.ofInputStream(() -> {
-                try {
-                    return Files.newInputStream(path, StandardOpenOption.READ);
-                } catch (IOException e) {
-                    throw new RuntimeException(e);
-                }
-            }))
-            .build();
-        HttpResponse<String> response = httpClient.send(request, BodyHandlers.ofString());
-        if (response.statusCode() < 200 || response.statusCode() > 299) {
-            LOG.error("Error uploading " + targetUrl + " : Response code was " + response.statusCode());
-            LOG.debug("   Response headers: " + response.headers());
-            LOG.debug("   Response body: " + response.body());
-        }
+    Utils.sleep(1000);
+    HttpRequest request = Utils.setCredentials(HttpRequest.newBuilder(), username, password)
+        .uri(URI.create(targetUrl))
+        .PUT(BodyPublishers.ofInputStream(() -> {
+          try {
+            return Files.newInputStream(path, StandardOpenOption.READ);
+          } catch (IOException e) {
+            throw new RuntimeException(e);
+          }
+        }))
+        .build();
+    HttpResponse<String> response = httpClient.send(request, BodyHandlers.ofString());
+    if (response.statusCode() < 200 || response.statusCode() > 299) {
+      LOG.error("Error uploading {} : Response code was {}", targetUrl, response.statusCode());
+      LOG.debug("   Response headers: {}", response.headers());
+      if(LOG.isDebugEnabled()){
+        LOG.debug("   Response body: {}", response.body());
+      }
     }
+  }
 
-    private String appendUrlPathSegment(String baseUrl, String segment) {
-        StringBuffer result = new StringBuffer(baseUrl);
+  private String appendUrlPathSegment(String baseUrl, String segment) {
+    StringBuilder result = new StringBuilder(baseUrl);
 
-        if (!baseUrl.endsWith("/")) {
-            result.append('/');
-        }
-        result.append(segment);
-        result.append('/');
-
-        return result.toString();
+    if (!baseUrl.endsWith("/")) {
+      result.append('/');
     }
+    result.append(segment);
+    result.append('/');
+
+    return result.toString();
+  }
 }

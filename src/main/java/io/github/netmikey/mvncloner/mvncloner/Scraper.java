@@ -48,7 +48,7 @@ public class Scraper {
     private static Set<String> FILENAME_BLACKLIST = new HashSet<>(
         Arrays.asList("maven-metadata.xml", "archetype-catalog.xml"));
 
-    @Value("${source.root-url}")
+    @Value("${source.root-url:#{null}}")
     private String rootUrl;
 
     @Value("${source.user:#{null}}")
